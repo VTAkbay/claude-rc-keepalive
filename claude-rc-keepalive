@@ -1,0 +1,27 @@
+#!/bin/zsh
+# Entry point, e.g. for the Homebrew install:  claude-rc-keepalive <command> [args]
+ROOT=${0:A:h}
+INSTALLED=$HOME/.local/share/claude-rc-keepalive/bin
+tool() { [[ -x $INSTALLED/claude-rc-$1 ]] && print $INSTALLED/claude-rc-$1 || print $ROOT/bin/claude-rc-$1; }
+case ${1:-help} in
+  install)    shift; exec $ROOT/install.sh "$@" ;;
+  uninstall)  shift; exec $ROOT/uninstall.sh "$@" ;;
+  status|consolidate|deregister|update) c=$1; shift; exec $(tool $c) "$@" ;;
+  test)       shift; exec $ROOT/tests/security "$@" ;;
+  fault-test) shift; exec $ROOT/tests/fault-stale-pointer "$@" ;;
+  version|--version|-v) cat $ROOT/VERSION ;;
+  *) cat <<USAGE
+claude-rc-keepalive $(cat $ROOT/VERSION) — keep claude remote-control sessions attached (macOS)
+
+  claude-rc-keepalive install --dir <folder> [--debug-log] [--prefix <label>] [--dry-run]
+  claude-rc-keepalive status        what is running, which environment, recent events
+  claude-rc-keepalive consolidate   merge sessions back under one remote control
+  claude-rc-keepalive deregister <env_id>   remove a stale entry from the app
+  claude-rc-keepalive uninstall [--purge]
+  claude-rc-keepalive test          offline security checks
+  claude-rc-keepalive fault-test    break it on purpose and watch it recover (~5 min)
+
+https://github.com/VTAkbay/claude-rc-keepalive
+USAGE
+  ;;
+esac

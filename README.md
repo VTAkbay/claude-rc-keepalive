@@ -62,11 +62,24 @@ Plus a few commands: `claude-rc-status`, `claude-rc-consolidate`, `claude-rc-der
 
 ## Install
 
+With Homebrew:
+
+```sh
+brew install vtakbay/tap/claude-rc-keepalive
+claude-rc-keepalive install --dir ~/code     # the folder new sessions start in
+```
+
+Or from a clone:
+
 ```sh
 git clone https://github.com/VTAkbay/claude-rc-keepalive
 cd claude-rc-keepalive
-./install.sh --dir ~/code          # the folder new sessions start in
+./install.sh --dir ~/code
 ```
+
+After `brew upgrade`, run `claude-rc-keepalive install --dir …` again to switch
+the running services to the new version. It leaves remote control itself
+running when its settings haven't changed, so sessions are not interrupted.
 
 `--dry-run` shows the generated LaunchAgents without installing anything.
 `--prefix com.example.claude-rc` changes the launchd labels.
@@ -76,10 +89,10 @@ cd claude-rc-keepalive
 Check it any time:
 
 ```sh
-claude-rc-status
+claude-rc-keepalive status       # or claude-rc-status
 ```
 
-Uninstall with `./uninstall.sh` (add `--purge` to delete config, state and logs).
+Uninstall with `claude-rc-keepalive uninstall` (or `./uninstall.sh`) (add `--purge` to delete config, state and logs).
 Uninstalling stops remote control with SIGTERM, so its environment is kept and a
 later reinstall reconnects the same sessions.
 

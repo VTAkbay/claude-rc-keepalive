@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 — unreleased
+## 0.1.0 — 2026-09-26
 
 First version, extracted from a setup that has run on one Mac since 2026-09-16.
 Every mechanism below exists because of a failure that happened there:
@@ -12,6 +12,8 @@ Every mechanism below exists because of a failure that happened there:
 - Guard retry window of 6 min — the server refused the old environment for ~3 min after its owner stopped.
 - Per-session keepalive, auto-merge, deregistration of the extra environment — the
   recovery steps that previously had to be run by hand.
+- `claude-rc-keepalive` entry command and a Homebrew tap (`vtakbay/tap`).
+- Reinstalling leaves an unchanged remote control running (no session interruption on upgrade).
 - Security review before release: debug log (conversation text) made opt-in;
   private umask/permissions for state, logs and LaunchAgent output; LaunchAgents
   generated with plistlib (no XML injection through folder names); process

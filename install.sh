@@ -76,10 +76,16 @@ rm -rf $PREFIX/bin $PREFIX/lib; cp -R $SRC/bin $SRC/lib $PREFIX/; chmod 755 $PRE
 print -r -- $config > $CONF
 tmp=$(mktemp -d); mkplists $tmp
 for t in remote-control watchdog updater; do
-  label=$PREFIX_LABEL.$t
+  label=$PREFIX_LABEL.$t; plist=$LA/$label.plist
+  plutil -lint -s $tmp/$label.plist
+  if cmp -s $tmp/$label.plist $plist && launchctl print gui/$(id -u)/$label >/dev/null 2>&1; then
+    # unchanged: leave remote control (and its sessions) alone; reload our tools for new code
+    [[ $t == remote-control ]] || launchctl kickstart -k gui/$(id -u)/$label
+    continue
+  fi
   launchctl bootout gui/$(id -u)/$label 2>/dev/null || true
-  plutil -lint -s $tmp/$label.plist; install -m 644 $tmp/$label.plist $LA/$label.plist
-  launchctl bootstrap gui/$(id -u) $LA/$label.plist
+  install -m 644 $tmp/$label.plist $plist
+  launchctl bootstrap gui/$(id -u) $plist
 done
 rm -rf $tmp
 [[ -d $HOME/.local/bin ]] && for b in $PREFIX/bin/*; do ln -sf $b $HOME/.local/bin/${b:t}; done
