@@ -1,0 +1,35 @@
+#!/bin/zsh
+# Fault injection: reproduce "rc came back on a new environment" on purpose and
+# check that the watchdog restores the old one and removes the extra one, with
+# nobody touching anything. Interrupts sessions for ~5 minutes; run it when idle.
+#   tests/fault-stale-pointer [--yes]
+source ${0:A:h}/../lib/common.zsh; need_config
+BIN=${BIN:-$HOME/.local/share/claude-rc-keepalive/bin}
+mp=$(lpid $RC_LABEL); E0=$(pointer_field environmentId)
+[[ -n "$mp" && "$(pointer_field pid)" == "$mp" ]] || { print "main rc not registered; aborting"; exit 1; }
+[[ -z "$(per_session_pids)" ]] || { print "per-session rc running; run claude-rc-consolidate first"; exit 1; }
+[[ "$(cat $STATE/last-env 2>/dev/null)" == "$E0" ]] || { print "watchdog does not expect $E0 yet; wait a minute"; exit 1; }
+[[ $1 == --yes ]] || { read -r "a?This restarts remote control and takes ~5 min. Continue? [y/N] "; [[ $a == [yY]* ]] || exit 0; }
+t0=$SECONDS; say() { print "[$(date +%H:%M:%S) +$((SECONDS-t0))s] $*"; }
+
+touch $STATE/paused                                   # hold the watchdog so it cannot refresh the pointer
+touch -t $(date -v-5H +%Y%m%d%H%M.%S) $POINTER        # older than rc's 4h limit
+say "pointer aged to 5h; restarting main rc (env $E0)"
+kill -TERM $mp; for i in {1..60}; do kill -0 $mp 2>/dev/null || break; sleep 1; done
+# the server refuses a second bridge for the same folder for ~3 min after the
+# previous one stopped, even for a brand-new environment, so allow ~6 min
+for i in {1..400}; do np=$(lpid $RC_LABEL); [[ -n "$np" && "$(pointer_field pid)" == "$np" ]] && break; sleep 1; done
+E1=$(pointer_field environmentId)
+[[ -n "$E1" ]] || { rm -f $STATE/paused; say "no new environment registered within 400s; see $LOGDIR/remote-control.err.log"; exit 1; }
+[[ "$E1" != "$E0" ]] || { rm -f $STATE/paused; say "rc reused $E0 despite the stale pointer: fault not reproduced (CLI behaviour changed?)"; exit 1; }
+say "fault reproduced: rc registered a new environment $E1"
+rm -f $STATE/paused; say "watchdog released; waiting for it to restore $E0 (up to 8 min)"
+ok=0
+for i in {1..96}; do
+  np=$(lpid $RC_LABEL)
+  [[ -n "$np" && "$(pointer_field pid)" == "$np" && "$(pointer_field environmentId)" == "$E0" ]] && { ok=1; break; }
+  sleep 5
+done
+(( ok )) && say "PASS: restored $E0" || { say "FAIL: main rc is on $(pointer_field environmentId)"; tail -5 $LOGDIR/watchdog.log; exit 1; }
+for i in {1..24}; do grep -q "deregistered $E1" $LOGDIR/watchdog.log 2>/dev/null && break; sleep 5; done
+grep -q "deregistered $E1" $LOGDIR/watchdog.log 2>/dev/null && say "PASS: extra environment $E1 removed" || say "WARN: $E1 not confirmed removed (see $LOGDIR/deregister.debug.log)"

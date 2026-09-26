@@ -1,0 +1,24 @@
+#!/bin/zsh
+# Deregister an environment nothing serves any more, so the app stops listing
+# it. rc only deregisters on shutdown when it could not persist its pointer, so
+# we run a short-lived rc on that environment from a free trusted folder whose
+# project dir is temporarily read-only, then stop it. Archives its sessions.
+source ${0:A:h}/../lib/common.zsh; need_config
+ENV=$1; [[ "$ENV" == env_* ]] || { print -u2 "usage: claude-rc-deregister env_..."; exit 2; }
+for p in $(rc_pids); do
+  [[ "$(jget $(project_dir $(proc_cwd $p))/bridge-pointer.json environmentId)" == "$ENV" ]] && { print -u2 "rc pid $p still serves $ENV; refusing"; exit 1; }
+done
+used=("${(@f)$(used_cwds)}"); free=""
+for c in ${(f)"$(trusted_dirs)"}; do [[ " ${used[*]} " == *" $c "* ]] || { free=$c; break; }; done
+[[ -n "$free" ]] || { print -u2 "no free trusted folder to run from"; exit 1; }
+pd=$(project_dir $free); mkdir -p $pd; bak=$(mktemp)
+[[ -f $pd/bridge-pointer.json ]] && cp $pd/bridge-pointer.json $bak
+restore() { chmod 755 $pd; if [[ -s $bak ]]; then cp $bak $pd/bridge-pointer.json; else rm -f $pd/bridge-pointer.json; fi; }
+trap restore EXIT
+write_pointer $ENV "" $pd/bridge-pointer.json; chmod 555 $pd
+dbg=$LOGDIR/deregister.debug.log; : > $dbg
+( cd $free && exec $CLAUDE remote-control --debug-file $dbg > $LOGDIR/deregister.log 2>&1 ) & tp=$!
+sleep 25; kill -TERM $tp 2>/dev/null; wait $tp 2>/dev/null
+if grep -q "DELETE /v1/environments/bridge/$ENV -> 200" $dbg; then log "deregistered $ENV"
+elif grep -q "Registered, server environmentId=$ENV" $dbg; then log "registered on $ENV but could not confirm the delete; see $dbg"; exit 1
+else log "server did not hand back $ENV (already gone, or still held); see $dbg"; exit 1; fi

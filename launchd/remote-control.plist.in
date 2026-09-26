@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key><string>@RC_LABEL@</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>@CLAUDE@</string>
+		<string>remote-control</string>
+		<string>--debug-file</string>
+		<string>@LOGDIR@/remote-control.debug.log</string>
+	</array>
+	<key>WorkingDirectory</key><string>@RC_DIR@</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key><string>@HOME@</string>
+		<key>PATH</key><string>@PATH@</string>
+	</dict>
+	<key>RunAtLoad</key><true/>
+	<!-- rc exits 0 after it gives up on the network: restart on every exit -->
+	<key>KeepAlive</key><true/>
+	<key>ThrottleInterval</key><integer>30</integer>
+	<key>ProcessType</key><string>Interactive</string>
+	<key>StandardOutPath</key><string>@LOGDIR@/remote-control.log</string>
+	<key>StandardErrorPath</key><string>@LOGDIR@/remote-control.err.log</string>
+</dict>
+</plist>

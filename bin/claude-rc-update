@@ -1,0 +1,53 @@
+#!/bin/zsh
+# Keeps `claude remote-control` on the newest Claude Code release without
+# losing sessions.
+#
+# `claude update` installs a new version and repoints ~/.local/bin/claude, but
+# the running rc (and every session it spawned) keeps executing the old binary.
+# A SIGTERM restart keeps the environment: rc skips "archive + deregister",
+# keeps its pointer, and the restarted rc asks the server to reuse it. It does
+# kill a turn in flight, so we only restart when every session has been idle
+# for MIN_IDLE. `launchctl kickstart -k` is avoided on purpose: the replacement
+# can start while the old process still holds the pointer.
+source ${0:A:h}/../lib/common.zsh; need_config
+MIN_IDLE=${MIN_IDLE:-600}; DRY_RUN=${DRY_RUN:-0}
+SESSIONS=$HOME/.claude/sessions
+
+out=$($CLAUDE update 2>&1) || log "claude update failed: ${out//$'\n'/ | }"
+
+pid=$(lpid $RC_LABEL)
+[[ -n "$pid" ]] || { log "rc not running; nothing to restart"; exit 0; }
+running=$(lsof -p "$pid" 2>/dev/null | awk '$4=="txt" && $9 ~ /\/claude\/versions\//{print $9; exit}')
+current=$(readlink "$CLAUDE")
+[[ -n "$running" && -n "$current" ]] || { log "cannot resolve versions (running='$running' installed='$current'); is this the native install?"; exit 1; }
+[[ "$running" == "$current" ]] && exit 0
+log "rc runs ${running:t}, installed ${current:t}"
+
+[[ "$(ps -o stat= -p "$pid" | tr -d ' ')" == T* ]] && { log "rc is frozen (network down); deferring"; exit 0; }
+
+now=$(date +%s)
+for f in $SESSIONS/*.json(N); do
+  spid=${${f:t}%%.*}
+  [[ "$(ps -o ppid= -p "$spid" 2>/dev/null | tr -d ' ')" == "$pid" ]] || continue
+  st=$(jget $f status); since=$(( $(jget $f statusUpdatedAt) / 1000 ))
+  if [[ "$st" != idle ]] || (( now - since < MIN_IDLE )); then log "session pid $spid is $st ($(( now - since ))s); deferring"; exit 0; fi
+done
+
+before=$(pointer_field environmentId)
+page=$(( now - $(stat -f %m "$POINTER" 2>/dev/null || echo 0) ))
+[[ -n "$before" ]] || { log "no readable pointer at $POINTER; not restarting (would lose the environment)"; exit 1; }
+[[ "$(pointer_field pid)" == "$pid" ]] || { log "pointer is not owned by rc pid $pid; not restarting"; exit 1; }
+(( page > 3*3600 )) && { log "pointer is ${page}s old (rc TTL is 4h); not restarting"; exit 1; }
+(( DRY_RUN )) && { log "DRY RUN: would restart rc pid $pid (env $before)"; exit 0; }
+
+log "stopping rc pid $pid to pick up ${current:t}"
+kill -TERM "$pid"
+for i in {1..60}; do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+kill -0 "$pid" 2>/dev/null && { log "rc pid $pid still alive after 60s; leaving it"; exit 1; }
+for i in {1..90}; do np=$(lpid $RC_LABEL); [[ -n "$np" && "$np" != "$pid" ]] && break; sleep 1; done
+# only the new process writing its own pid into the pointer proves it registered
+for i in {1..120}; do [[ -n "$np" && "$(pointer_field pid)" == "$np" ]] && break; sleep 1; np=$(lpid $RC_LABEL); done
+after=$(pointer_field environmentId)
+if [[ "$(pointer_field pid)" != "$np" ]]; then log "new rc (pid ${np:-?}) not registered after 120s; the watchdog keeps the pointer fresh and guards the environment"
+elif [[ "$after" == "$before" ]]; then log "restarted as pid $np; environment kept"
+else log "ENVIRONMENT CHANGED: $before -> $after; the watchdog guard will try to restore it"; fi

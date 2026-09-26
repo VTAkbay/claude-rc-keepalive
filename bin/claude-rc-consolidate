@@ -1,0 +1,70 @@
+#!/bin/zsh
+# Merge sessions that the watchdog moved onto per-session processes back under
+# the always-on rc, then (after asking) deregister the main rc's now-empty
+# environment so the app lists this machine once. Run it from a terminal, not
+# from a session it is about to interrupt.
+# Order matters: the server refuses the main rc on an environment while other
+# bridges hold it, and keeps refusing for ~2-3 minutes after they stop.
+# AUTO=1 (used by the watchdog): no prompt, and the old environment is only
+# deregistered when it never held a real conversation.
+source ${0:A:h}/../lib/common.zsh; need_config
+MAX_WAIT=${MAX_WAIT:-600}; AUTO=${AUTO:-0}
+if (( AUTO )); then say() { log "$*"; }; else say() { log "$*" | tee -a $LOGDIR/consolidate.log; }; fi
+
+pids=($(per_session_pids))
+(( ${#pids} )) || { say "no per-session rc running; nothing to consolidate"; exit 0; }
+typeset -A envs; anchor=""
+for p in $pids; do
+  envs[$(jget $(project_dir $(proc_cwd $p))/bridge-pointer.json environmentId)]=1
+  [[ -z "$anchor" ]] && anchor=$(ps -o command= -p $p | awk '{print $4}')
+done
+(( ${#envs} == 1 )) || { say "per-session rc are on different environments (${(k)envs}); refusing"; exit 1; }
+TARGET=${(k)envs}; OLD=$(pointer_field environmentId); mp=$(lpid $RC_LABEL)
+say "target $TARGET (${#pids} per-session rc); main rc pid $mp is on $OLD"
+[[ "$TARGET" == "$OLD" ]] && { say "main rc is already on $TARGET"; exit 0; }
+
+for i in {1..60}; do   # every rc-served session idle, up to 5 min
+  busy=0
+  for f in $HOME/.claude/sessions/*.json(N); do
+    pp=$(ps -o ppid= -p ${${f:t}%%.*} 2>/dev/null | tr -d ' ')
+    [[ -n "$pp" ]] && ps -o command= -p $pp | grep -q remote-control || continue
+    [[ "$(jget $f status)" == idle ]] || busy=1
+  done
+  (( busy )) || break; sleep 5
+done
+(( busy )) && { say "sessions still busy after 5 min; nothing changed"; exit 1; }
+
+touch $STATE/paused; trap 'rm -f $STATE/paused' EXIT; sleep 6   # watchdog idles while the flag exists
+say "stopping per-session rc: $pids"
+for p in $pids; do kill -TERM $p 2>/dev/null; done
+for i in {1..60}; do [[ -z "$(per_session_pids)" ]] && break; sleep 1; done
+[[ -n "$(per_session_pids)" ]] && { say "per-session rc still alive; aborting (the watchdog keeps them)"; exit 1; }
+
+write_pointer $TARGET $anchor $POINTER; echo $TARGET > $STATE/last-env   # pointer first
+kill -TERM $mp; say "restarting main rc; waiting up to ${MAX_WAIT}s for the server to accept $TARGET"
+for i in {1..60}; do kill -0 $mp 2>/dev/null || break; sleep 1; done
+t0=$SECONDS; ok=0; last=""
+while (( SECONDS - t0 < MAX_WAIT )); do
+  np=$(lpid $RC_LABEL)
+  [[ -n "$np" && "$np" != "$last" ]] && { last=$np; say "attempt pid $np ($((SECONDS-t0))s)"; }
+  [[ -n "$np" && "$(pointer_field pid)" == "$np" && "$(pointer_field environmentId)" == "$TARGET" ]] && { ok=1; break; }
+  sleep 5
+done
+if (( ! ok )); then
+  say "still refused after ${MAX_WAIT}s; reverting to $OLD (the watchdog relaunches the per-session rc)"
+  write_pointer $OLD "" $POINTER; echo $OLD > $STATE/last-env
+  np=$(lpid $RC_LABEL); [[ -n "$np" ]] && kill -TERM $np; exit 1
+fi
+say "SUCCESS: main rc on $TARGET after $((SECONDS-t0))s"
+rm -f $STATE/paused
+
+if (( AUTO )) || [[ ! -t 0 ]]; then
+  if env_has_real_sessions $OLD; then say "keeping $OLD listed: it has real sessions (claude-rc-deregister $OLD removes it)"; exit 0; fi
+  exec ${0:A:h}/claude-rc-deregister $OLD
+fi
+print "\nThe previous environment $OLD is now unused. Removing it drops the extra"
+print "entry for this machine in the app, and ARCHIVES any session still on it."
+print "Normally that is only the idle placeholder rc creates on every start."
+read -r "ans?Remove it? [y/N] "
+[[ "$ans" == [yY]* ]] && exec ${0:A:h}/claude-rc-deregister $OLD
+say "kept $OLD"

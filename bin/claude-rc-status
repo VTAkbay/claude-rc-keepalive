@@ -1,0 +1,30 @@
+#!/bin/zsh
+# One screen of everything worth knowing when the app says the machine is unreachable.
+source ${0:A:h}/../lib/common.zsh; need_config
+ok() { print -P "%F{green}✔%f $*"; }; bad() { print -P "%F{red}✘%f $*"; }; note() { print "  $*"; }
+
+for l in $RC_LABEL $WD_LABEL $UP_LABEL; do
+  st=$(launchctl print gui/$(id -u)/$l 2>/dev/null | awk '/^\tstate =/{print $3; exit}')
+  if [[ -z "$st" ]]; then bad "$l not loaded"
+  elif [[ $l == $UP_LABEL ]]; then ok "$l loaded (runs every 30 min)"
+  elif [[ $st == running ]]; then ok "$l running"; else bad "$l $st"; fi
+done
+
+mp=$(lpid $RC_LABEL)
+if [[ -n "$mp" ]]; then
+  running=$(lsof -p $mp 2>/dev/null | awk '$4=="txt" && $9 ~ /\/claude\/versions\//{print $9; exit}')
+  [[ "$(ps -o stat= -p $mp | tr -d ' ')" == T* ]] && bad "main rc pid $mp is FROZEN (watchdog: network down)" || ok "main rc pid $mp in $RC_DIR"
+  [[ "${running:t}" == "$(readlink $CLAUDE | xargs basename)" ]] && ok "running ${running:t} (latest installed)" || note "running ${running:t}, installed $(readlink $CLAUDE | xargs basename) (updater switches when idle)"
+fi
+
+if [[ -f $POINTER ]]; then
+  env=$(pointer_field environmentId); age=$(( $(date +%s) - $(stat -f %m $POINTER) )); want=$(cat $STATE/last-env 2>/dev/null)
+  [[ "$(pointer_field pid)" == "$mp" ]] && ok "registered on $env" || bad "pointer not owned by the main rc (pid $(pointer_field pid)); rc may still be starting"
+  (( age < 4*3600 )) && ok "pointer age $((age/60)) min (limit 240)" || bad "pointer age $((age/60)) min: past rc's 4h limit"
+  [[ -z "$want" || "$want" == "$env" ]] || bad "watchdog expects $want"
+else bad "no pointer at $POINTER"; fi
+
+ps=($(per_session_pids))
+(( ${#ps} )) && { note "${#ps} per-session rc process(es) (sessions kept alive after an environment change):"; for p in $ps; do note "  pid $p $(ps -o command= -p $p | awk '{print $5}') in $(proc_cwd $p)"; done; note "run claude-rc-consolidate to merge them back"; }
+print "\nlast watchdog events:"; grep -vE "watchdog (v[0-9] )?started" $LOGDIR/watchdog.log 2>/dev/null | tail -4 | sed 's/^/  /'
+print "last updater events:"; tail -2 $LOGDIR/updater.log 2>/dev/null | sed 's/^/  /'

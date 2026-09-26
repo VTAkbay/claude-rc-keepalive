@@ -1,0 +1,17 @@
+# Changelog
+
+## 0.1.0 — unreleased
+
+First version, extracted from a setup that has run on one Mac since 2026-09-16.
+Every mechanism below exists because of a failure that happened there:
+
+- KeepAlive on every exit — remote control exits 0 after it gives up offline.
+- Outage freeze — 10‑minute give-up deleted the environment during a 6 h DNS outage.
+- Idle-gated SIGTERM updater, no `kickstart -k` — a kickstart restart registered a new environment.
+- Pointer freshening — a restart that took effect 9 h later found the pointer past its 4 h limit.
+- Guard retry window of 6 min — the server refused the old environment for ~3 min after its owner stopped.
+- Per-session keepalive, auto-merge, deregistration of the extra environment — the
+  recovery steps that previously had to be run by hand.
+- Verified by fault injection on 2.1.283 / macOS 27: pointer aged past 4 h + restart
+  → rc registered a new environment after ~3 min of 409 refusals → the watchdog
+  restored the original one ~3 min later and deregistered the extra one, unattended.

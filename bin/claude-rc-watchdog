@@ -1,0 +1,179 @@
+#!/bin/zsh
+# Keeps `claude remote-control` (rc) sessions attached, whatever happens.
+#
+# 1. Outage freeze. After 10 minutes of failed polls rc gives up, and on that
+#    path it deletes its environment, orphaning every session opened from the
+#    app. While the network is down we SIGSTOP every rc process and SIGCONT them
+#    when it is back; rc sees the gap as system sleep and resets its error budget.
+# 2. Fresh pointer. rc only reuses its environment if bridge-pointer.json is
+#    younger than 4 hours (by mtime). rc refreshes it hourly, but not while it
+#    is stopped, frozen, stuck, or waiting for a login after a reboot. We touch
+#    it every 30 minutes while it still names the environment we want.
+# 3. Environment guard. If the main rc comes back on a different environment
+#    (and is not busy there yet), restore the previous one. The server keeps
+#    refusing an environment for ~3 minutes after its previous owner stopped,
+#    so the pointer stays on it while launchd retries, for up to GUARD_WAIT.
+# 4. Session keepalive. Every session seen in the last MAX_AGE is recorded with
+#    its environment. One whose environment is not the main rc's gets its own
+#    `claude remote-control --session-id` process, started from a free folder
+#    the user already trusted in Claude Code.
+# 5. Self-healing. After a successful restore the short-lived extra environment
+#    is deregistered, and a split (sessions on per-session processes) is merged
+#    back under the main rc once everything has been idle for AUTO_IDLE, so no
+#    failure path ends with the user running something by hand.
+source ${0:A:h}/../lib/common.zsh; need_config
+
+PROBE_URL=${PROBE_URL:-https://api.anthropic.com/}
+UP_INTERVAL=${UP_INTERVAL:-20}; DOWN_INTERVAL=${DOWN_INTERVAL:-10}
+FAILS_TO_FREEZE=${FAILS_TO_FREEZE:-3}; OKS_TO_THAW=${OKS_TO_THAW:-2}
+GUARD_WAIT=${GUARD_WAIT:-360}; MAX_AGE=${MAX_AGE:-86400}
+AUTO_IDLE=${AUTO_IDLE:-900}; AUTO_RETRY=${AUTO_RETRY:-3600}
+BIN=${0:A:h}
+DRY_RUN=${DRY_RUN:-0}
+LAST_ENV=$STATE/last-env; DROPPED=$STATE/dropped.tsv
+touch $REG $DROPPED
+main_pid() { lpid $RC_LABEL; }
+probe() { curl -s -o /dev/null -m 8 "$PROBE_URL"; }
+
+# ---------- 1. freeze / thaw ----------
+typeset -A frozen; frozen_at=0
+freeze_all() { local p; for p in $(rc_pids); do [[ -n "${frozen[$p]}" ]] && continue; kill -STOP $p 2>/dev/null && frozen[$p]=1; done; frozen_at=$SECONDS; log "network down, froze rc pids: ${(k)frozen}"; }
+thaw_all() { (( ${#frozen} )) || return; local p; for p in ${(k)frozen}; do kill -CONT $p 2>/dev/null; done; log "thawed rc pids: ${(k)frozen}"; frozen=(); }
+trap 'thaw_all; exit 0' TERM INT HUP
+trap 'thaw_all' EXIT
+for p in $(rc_pids); do kill -CONT $p 2>/dev/null; done   # a previous watchdog may have died while frozen
+
+# ---------- 2. fresh pointer ----------
+keep_pointer_fresh() {
+  local want=$(cat $LAST_ENV 2>/dev/null); [[ -n "$want" && -f $POINTER ]] || return
+  [[ "$(pointer_field environmentId)" == "$want" ]] || return
+  (( $(date +%s) - $(stat -f %m $POINTER) > 1800 )) && { (( DRY_RUN )) || touch $POINTER; }
+}
+
+# ---------- 3. environment guard ----------
+env_guard() {
+  local mp=$(main_pid); [[ -n "$mp" ]] || return
+  [[ "$(pointer_field source)" == standalone && "$(pointer_field pid)" == "$mp" ]] || return   # not registered yet
+  local env=$(pointer_field environmentId) want=$(cat $LAST_ENV 2>/dev/null); [[ -n "$env" ]] || return
+  if [[ -z "$want" ]]; then echo $env > $LAST_ENV; log "env guard: recorded $env"; return; fi
+  [[ "$env" == "$want" ]] && return
+  # rc pre-creates an idle placeholder session on every start; only a busy child is real work
+  local ch busy=0; for ch in $(pgrep -P $mp); do [[ "$(jget $HOME/.claude/sessions/$ch.json status)" == busy ]] && busy=1; done
+  if (( busy )); then log "env guard: main rc is busy on $env (wanted $want); accepting it, sessions on $want get reattached"; echo $env > $LAST_ENV; return; fi
+  log "env guard: main rc came back on $env instead of $want; restoring (up to ${GUARD_WAIT}s)"
+  (( DRY_RUN )) && return
+  write_pointer $want "" $POINTER; kill -TERM $mp 2>/dev/null   # pointer first: the relaunch reads it within ms
+  local i np t0=$SECONDS; for i in {1..60}; do kill -0 $mp 2>/dev/null || break; sleep 1; done
+  while (( SECONDS - t0 < GUARD_WAIT )); do   # a refused rc exits after ~55s and launchd retries
+    np=$(main_pid)
+    if [[ -n "$np" && "$(pointer_field pid)" == "$np" && "$(pointer_field environmentId)" == "$want" ]]; then
+      log "env guard: restored $want ($((SECONDS-t0))s)"
+      if env_has_real_sessions $env; then log "keeping $env listed: it has real sessions"
+      else log "deregistering the transient environment $env"; spawn_detached $LOGDIR/watchdog.log $HOME $BIN/claude-rc-deregister $env; fi
+      return
+    fi
+    sleep 5
+  done
+  log "env guard: $want still refused after ${GUARD_WAIT}s; keeping $env, sessions on $want get reattached"
+  write_pointer $env "" $POINTER; echo $env > $LAST_ENV
+  np=$(main_pid); [[ -n "$np" ]] && kill -TERM $np 2>/dev/null
+}
+
+# ---------- 4. session registry + keepalive ----------
+reg_upsert() {   # sid env folder busy(0/1) -> prints "new" if unknown before
+  python3 - "$REG" "$1" "$2" "$3" "$4" <<'P'
+import sys,time,os
+reg,sid,env,folder,busy=sys.argv[1:6]
+rows=[(l.rstrip('\n').split('\t')+['-','-','-','0','0','0'])[:6] for l in open(reg) if l.strip()]
+rows=[r[:5]+[r[5] if r[5] in ('0','1') else '0'] for r in rows]
+now=str(int(time.time())); new=True
+for r in rows:
+    if r[0]==sid:
+        new=False; r[1]=env; r[4]=now
+        if folder!='-': r[2]=folder
+        if busy=='1': r[5]='1'
+if new: rows.append([sid,env,folder,'0',now,busy])
+open(reg+'.tmp','w').write(''.join('\t'.join(r)+'\n' for r in rows)); os.replace(reg+'.tmp',reg)
+print('new' if new else '')
+P
+}
+register_seen() {
+  local mp=$(main_pid) menv=$(pointer_field environmentId) f spid sid pp d e b
+  for f in $HOME/.claude/sessions/*.json(N); do
+    spid=${${f:t}%%.*}; sid=$(jget $f bridgeSessionId); [[ "$(jget $f status)" == busy ]] && b=1 || b=0
+    [[ "$sid" == session_* ]] || continue
+    grep -q "^$sid	" $DROPPED && continue
+    pp=$(ps -o ppid= -p $spid 2>/dev/null | tr -d ' '); [[ -n "$pp" ]] || continue
+    if [[ "$pp" == "$mp" && -n "$menv" ]]; then
+      [[ "$(reg_upsert $sid $menv - $b)" == new ]] && log "registered $sid on $menv"
+    elif [[ "$(sid_pid $sid)" == "$pp" ]]; then
+      d=$(proc_cwd $pp); e=$(jget $(project_dir $d)/bridge-pointer.json environmentId)
+      [[ -n "$e" && "$(reg_upsert $sid $e $d $b)" == new ]] && log "registered $sid on $e (per-session in $d)"
+    fi
+  done
+}
+typeset -A launched_at
+keepalive() {
+  local menv=$(pointer_field environmentId); [[ -n "$menv" ]] || return
+  local now=$SECONDS epoch=$(date +%s) used=("${(@f)$(used_cwds)}") cands=("${(@f)$(trusted_dirs)}")
+  local tmp=$(mktemp) sid env folder quick seen real c
+  while IFS=$'\t' read -r sid env folder quick seen real; do
+    [[ -n "$sid" ]] || continue
+    if [[ "$env" == "$menv" || -n "$(sid_pid $sid)" ]] || (( epoch - ${seen:-0} > MAX_AGE )); then
+      print -r -- "$sid	$env	$folder	$quick	$seen	${real:-0}" >> $tmp; continue
+    fi
+    if [[ -n "${launched_at[$sid]}" ]] && (( now - launched_at[$sid] < 90 )); then
+      (( quick++ )); log "per-session rc for $sid exited within 90s ($quick)"
+      if (( quick >= 2 )); then log "dropping $sid (ended in the app, or folder not trusted)"; print -r -- "$sid	$env	$folder	$quick	$seen	${real:-0}" >> $DROPPED; unset "launched_at[$sid]"; continue; fi
+    fi
+    if [[ "$folder" == - || -z "$folder" || " ${used[*]} " == *" $folder "* ]]; then
+      folder=-; for c in $cands; do [[ " ${used[*]} " == *" $c "* ]] || { folder=$c; break; }; done
+    fi
+    if [[ "$folder" == - ]]; then log "no free trusted folder for $sid"; print -r -- "$sid	$env	-	$quick	$seen	${real:-0}" >> $tmp; continue; fi
+    log "reattaching $sid (env $env) from $folder"
+    if (( ! DRY_RUN )); then
+      # own session/process group, so neither rc's shutdown nor ours takes the other down
+      python3 -c 'import subprocess,sys; l=open(sys.argv[1],"ab"); subprocess.Popen(sys.argv[3:],cwd=sys.argv[2],stdin=subprocess.DEVNULL,stdout=l,stderr=l,start_new_session=True)' \
+        $LOGDIR/reattach-${sid#session_}.log "$folder" $CLAUDE remote-control --session-id "$sid"
+      launched_at[$sid]=$now; used+=("$folder")
+    fi
+    print -r -- "$sid	$env	$folder	$quick	$seen	${real:-0}" >> $tmp
+  done < $REG
+  mv $tmp $REG
+}
+
+last_auto=-$AUTO_RETRY
+auto_consolidate() {
+  local ps=($(per_session_pids)); (( ${#ps} )) || return
+  (( SECONDS - last_auto >= AUTO_RETRY )) || return
+  local menv=$(pointer_field environmentId); [[ -n "$menv" ]] || return
+  env_has_real_sessions $menv && return   # real sessions on both sides: stay split, both keep working
+  local f pp now=$(date +%s)
+  for f in $HOME/.claude/sessions/*.json(N); do
+    pp=$(ps -o ppid= -p ${${f:t}%%.*} 2>/dev/null | tr -d ' ')
+    [[ -n "$pp" ]] && ps -o command= -p $pp | grep -q remote-control || continue
+    [[ "$(jget $f status)" == idle ]] || return
+    (( now - $(jget $f statusUpdatedAt)/1000 >= AUTO_IDLE )) || return
+  done
+  last_auto=$SECONDS
+  log "auto-consolidating ${#ps} per-session rc back under the main rc (all idle ${AUTO_IDLE}s+)"
+  (( DRY_RUN )) || spawn_detached $LOGDIR/consolidate.log $HOME /usr/bin/env AUTO=1 $BIN/claude-rc-consolidate
+}
+
+log "watchdog started (main rc pid $(main_pid), dir $RC_DIR, dry=$DRY_RUN)"
+fails=0 oks=0
+while true; do
+  # claude-rc-consolidate is running (ignore a flag left behind by a crash)
+  if [[ -f $STATE/paused ]] && (( $(date +%s) - $(stat -f %m $STATE/paused) < 1200 )); then sleep 5; continue; fi
+  keep_pointer_fresh
+  if probe; then
+    fails=0
+    if (( ${#frozen} )); then (( oks++ )); (( oks >= OKS_TO_THAW )) && { log "network back after $(( SECONDS - frozen_at ))s"; thaw_all; }
+    else env_guard; register_seen; keepalive; auto_consolidate; fi
+  else
+    oks=0
+    if (( ! ${#frozen} )); then (( fails++ )); (( fails >= FAILS_TO_FREEZE )) && { freeze_all; fails=0; }
+    else for p in ${(k)frozen}; do kill -0 $p 2>/dev/null || unset "frozen[$p]"; done; fi
+  fi
+  if (( ${#frozen} )); then sleep $DOWN_INTERVAL; else sleep $UP_INTERVAL; fi
+done
