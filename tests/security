@@ -34,7 +34,11 @@ check "state files are private (600)"                 '[[ $(stat -f %Lp $T/st/f)
 
 # 4. only this user's processes are ever matched
 check "process matching is per-user"  '! grep -q "ps -ax" $R/lib/common.zsh $R/bin/* $R/install.sh'
-# 5. no secrets or personal identifiers in the repository
+# 5. no secrets or personal identifiers in the repository (needs a git checkout)
+if ! git -C $R rev-parse --git-dir >/dev/null 2>&1; then
+  print "- skipped the repository checks (not a git checkout, e.g. a Homebrew install)"
+else
 check "no tokens in the repo"         '! git -C $R grep -qE "(sk-ant-[A-Za-z0-9_-]{20}|gh[pous]_[A-Za-z0-9]{30}|environment_secret\": *\"[^\"]{8})" -- ":!tests/security"'
 check "no environment/session ids"    '! git -C $R grep -qE "(env|session)_01[A-Za-z0-9]{20}" -- ":!tests/security"'
+fi
 print "\n$pass passed, $fail failed"; (( fail == 0 ))
