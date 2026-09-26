@@ -10,10 +10,13 @@ disconnected"* forever, or the machine appears twice in the environment picker.
 This project is a set of small launchd services that prevent that, and repair it
 automatically when it happens anyway.
 
-> **Status: unofficial stopgap.** It relies on how Claude Code's remote control
-> behaves internally (files, timeouts, server responses), found by reading the
-> CLI and by breaking it on purpose. None of that is a documented interface, so
-> any Claude Code release can change it. See [Tested with](#tested-with).
+> **Status: unofficial stopgap, not affiliated with or endorsed by Anthropic.**
+> It relies on how Claude Code's remote control behaves (files, timeouts, server
+> responses), as described in the
+> [Remote Control docs](https://code.claude.com/docs/en/remote-control), shown in
+> Claude Code's own logs, and verified by breaking it on purpose (see
+> [Testing](#testing)). Parts of that are not a stable interface, so any Claude
+> Code release can change it. See [Tested with](#tested-with).
 
 ## What goes wrong without it
 
@@ -164,4 +167,6 @@ the whole log: it contains conversation text).
 
 ## License
 
-MIT
+MIT. Claude and Claude Code are trademarks of Anthropic, PBC. This is an
+independent community project, not affiliated with, sponsored or endorsed by
+Anthropic; the name only describes what it works with.
