@@ -31,7 +31,7 @@ automatically when it happens anyway.
 Three LaunchAgents, per user:
 
 - **remote-control** — `claude remote-control` itself, in the folder you choose,
-  restarted on every exit, with a debug log.
+  restarted on every exit (optionally with a debug log).
 - **watchdog** — every 20 s:
   - *freezes* every remote-control process while the network is down (so none of
     them reaches the 10‑minute give-up) and resumes them when it is back;
@@ -70,6 +70,8 @@ cd claude-rc-keepalive
 
 `--dry-run` shows the generated LaunchAgents without installing anything.
 `--prefix com.example.claude-rc` changes the launchd labels.
+`--debug-log` also keeps Claude Code's remote-control debug log (see
+[Security and privacy](#security-and-privacy) before turning it on).
 
 Check it any time:
 
@@ -96,13 +98,41 @@ later reinstall reconnects the same sessions.
 
 ## Troubleshooting
 
-- `claude-rc-status` first. Logs are in `~/Library/Logs/claude-rc-keepalive/`;
-  `remote-control.debug.log` records why remote control picked an environment.
+- `claude-rc-status` first. Logs are in `~/Library/Logs/claude-rc-keepalive/`.
+  To see *why* remote control picked an environment, reinstall with `--debug-log`.
 - The machine is listed twice and the watchdog hasn't merged it yet (it waits for
   15 idle minutes): run `claude-rc-consolidate` in Terminal.
 - A stale extra entry with nothing on it: `claude-rc-deregister env_…`.
 
+## Security and privacy
+
+- Everything runs as your user; nothing needs `sudo`. Only your own processes
+  are ever stopped, frozen or restarted.
+- Nothing is sent anywhere except what `claude remote-control` itself sends; the
+  watchdog only makes a plain HTTPS request to `api.anthropic.com` to see
+  whether the network is up.
+- State and logs are created private to your user (`umask 077`, folders `700`).
+- The watchdog never edits Claude Code's settings. It reads `~/.claude.json`
+  to find folders you already trusted, and only starts helper
+  `claude remote-control` processes in ones **without** project-level Claude
+  config (`.claude/settings*.json`, `.mcp.json`), so no project's hooks or MCP
+  servers start in the background. Set `REATTACH_DIRS="/path/a /path/b"` in
+  `~/.config/claude-rc-keepalive/config` to choose them yourself.
+- `--debug-log` makes Claude Code write a debug log that includes **your
+  conversation text** (Claude Code redacts its own tokens). It stays in your
+  private log folder and is capped at 20 MB, but never paste it into an issue
+  unedited — share `claude-rc-status` output and the `bridge:init` /
+  `bridge:pointer` lines instead.
+- Deregistering an environment archives the sessions still on it. The tools
+  only do that for environments that never held a real conversation, and
+  `claude-rc-consolidate` asks first.
+
 ## Testing
+
+`tests/security` runs offline checks: hostile folder names (quotes, `&`, XML,
+`$(...)`) can't break the LaunchAgents or execute anything, files are private,
+folders with project config are never used as helpers, and the repository holds
+no tokens or IDs.
 
 `tests/fault-stale-pointer` reproduces the "came back on a new environment"
 failure on purpose (ages the pointer past 4 hours and restarts remote control)
@@ -116,7 +146,8 @@ one by itself. It interrupts sessions for ~5 minutes.
 | 2.1.272 – 2.1.283 | 26.x, 27.0 (Apple silicon) | outages, updates, restarts, split/merge — see CHANGELOG |
 
 If a Claude Code release breaks it, please open an issue with
-`claude-rc-status` output and the tail of `remote-control.debug.log`.
+`claude-rc-status` output and the `bridge:` lines from the debug log (never
+the whole log: it contains conversation text).
 
 ## License
 

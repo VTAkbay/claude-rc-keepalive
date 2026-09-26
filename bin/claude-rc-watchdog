@@ -161,8 +161,9 @@ auto_consolidate() {
 }
 
 log "watchdog started (main rc pid $(main_pid), dir $RC_DIR, dry=$DRY_RUN)"
-fails=0 oks=0
+fails=0 oks=0; last_trim=0
 while true; do
+  (( SECONDS - last_trim > 600 )) && { trim_logs; last_trim=$SECONDS; }
   # claude-rc-consolidate is running (ignore a flag left behind by a crash)
   if [[ -f $STATE/paused ]] && (( $(date +%s) - $(stat -f %m $STATE/paused) < 1200 )); then sleep 5; continue; fi
   keep_pointer_fresh

@@ -12,6 +12,12 @@ Every mechanism below exists because of a failure that happened there:
 - Guard retry window of 6 min — the server refused the old environment for ~3 min after its owner stopped.
 - Per-session keepalive, auto-merge, deregistration of the extra environment — the
   recovery steps that previously had to be run by hand.
+- Security review before release: debug log (conversation text) made opt-in;
+  private umask/permissions for state, logs and LaunchAgent output; LaunchAgents
+  generated with plistlib (no XML injection through folder names); process
+  matching limited to the current user; helper folders exclude projects with
+  their own Claude config; deregistration restores the folder's original mode;
+  logs capped at 20 MB. `tests/security` covers these.
 - Verified by fault injection on 2.1.283 / macOS 27: pointer aged past 4 h + restart
   → rc registered a new environment after ~3 min of 409 refusals → the watchdog
   restored the original one ~3 min later and deregistered the extra one, unattended.

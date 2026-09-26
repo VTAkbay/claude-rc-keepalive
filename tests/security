@@ -1,0 +1,40 @@
+#!/bin/zsh
+# Offline security checks: hostile folder names, file permissions, helper-folder
+# selection, and secrets in the repository. Changes nothing outside a temp dir.
+R=${0:A:h}/..; T=$(mktemp -d); trap 'rm -rf $T' EXIT
+pass=0 fail=0
+check() { if eval "$2"; then print "✔ $1"; (( pass++ )); else print "✘ $1"; (( fail++ )); fi; }
+EVIL='/tmp/x & y <a></string><key>Evil</key><string>$(touch '$T'/pwned)`touch '$T'/pwned2`'
+
+# 1. LaunchAgents: a hostile folder name round-trips exactly and adds no keys
+python3 $R/lib/mkplists.py $T com.test.crk /bin/echo "$EVIL" $HOME "/usr/bin:$EVIL" $T/logs $T/pfx 0
+check "plists are valid"              'for f in $T/*.plist; do plutil -lint -s $f || return 1; done'
+check "folder name round-trips"       '[[ "$(plutil -extract WorkingDirectory raw -o - $T/com.test.crk.remote-control.plist)" == "$EVIL" ]]'
+check "no injected keys"              '! plutil -extract Evil raw -o - $T/com.test.crk.remote-control.plist >/dev/null 2>&1'
+check "no debug log by default"       '! grep -q debug-file $T/com.test.crk.remote-control.plist'
+check "umask 077 in every agent"      '[[ $(grep -l "<key>Umask</key>" $T/*.plist | wc -l) -eq 3 ]]'
+python3 $R/lib/mkplists.py $T/d com.test.crk /bin/echo /x $HOME /usr/bin $T/logs $T/pfx 1 2>/dev/null || { mkdir -p $T/d; python3 $R/lib/mkplists.py $T/d com.test.crk /bin/echo /x $HOME /usr/bin $T/logs $T/pfx 1; }
+check "--debug-log adds the debug file" 'grep -q debug-file $T/d/com.test.crk.remote-control.plist'
+
+# 2. config quoting: sourcing a config for a hostile folder runs nothing
+print -r -- "RC_DIR=${(q)EVIL}" > $T/config
+( source $T/config; [[ "$RC_DIR" == "$EVIL" ]] ) ; check "config keeps the name literally" '(( $? == 0 ))'
+check "no command ran from the name"  '[[ ! -e $T/pwned && ! -e $T/pwned2 ]]'
+
+# 3. private files; helper folders skip projects with their own Claude config
+mkdir -p $T/home/.claude $T/safe $T/hooks/.claude $T/mcp
+print '{}' > $T/hooks/.claude/settings.json; print '{}' > $T/mcp/.mcp.json
+python3 -c 'import json,sys; t=sys.argv[1]; json.dump({"projects":{p:{"hasTrustDialogAccepted":True} for p in (t+"/safe",t+"/hooks",t+"/mcp",t+"/home")}},open(t+"/home/.claude.json","w"))' $T
+out=$(HOME=$T/home CLAUDE_RC_KEEPALIVE_CONF=$T/none zsh -c "RC_DIR=$T/rc; source $R/lib/common.zsh; trusted_dirs; mkdir -p $T/st; STATE=$T/st; LOGDIR=$T/lg; need_config; touch \$STATE/f")
+check "trusted folder without project config is used" '[[ "$out" == *"$T/safe"* ]]'
+check "folder with .claude/settings.json is skipped"  '[[ "$out" != *"$T/hooks"* ]]'
+check "folder with .mcp.json is skipped"              '[[ "$out" != *"$T/mcp"* ]]'
+check "state dir is private (700)"                    '[[ $(stat -f %Lp $T/st) == 700 ]]'
+check "state files are private (600)"                 '[[ $(stat -f %Lp $T/st/f) == 600 ]]'
+
+# 4. only this user's processes are ever matched
+check "process matching is per-user"  '! grep -q "ps -ax" $R/lib/common.zsh $R/bin/* $R/install.sh'
+# 5. no secrets or personal identifiers in the repository
+check "no tokens in the repo"         '! git -C $R grep -qE "(sk-ant-[A-Za-z0-9_-]{20}|gh[pous]_[A-Za-z0-9]{30}|environment_secret\": *\"[^\"]{8})" -- ":!tests/security"'
+check "no environment/session ids"    '! git -C $R grep -qE "(env|session)_01[A-Za-z0-9]{20}" -- ":!tests/security"'
+print "\n$pass passed, $fail failed"; (( fail == 0 ))

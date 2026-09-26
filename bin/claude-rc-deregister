@@ -11,9 +11,9 @@ done
 used=("${(@f)$(used_cwds)}"); free=""
 for c in ${(f)"$(trusted_dirs)"}; do [[ " ${used[*]} " == *" $c "* ]] || { free=$c; break; }; done
 [[ -n "$free" ]] || { print -u2 "no free trusted folder to run from"; exit 1; }
-pd=$(project_dir $free); mkdir -p $pd; bak=$(mktemp)
+pd=$(project_dir $free); mkdir -p $pd; mode=$(stat -f %Lp $pd); bak=$(mktemp)
 [[ -f $pd/bridge-pointer.json ]] && cp $pd/bridge-pointer.json $bak
-restore() { chmod 755 $pd; if [[ -s $bak ]]; then cp $bak $pd/bridge-pointer.json; else rm -f $pd/bridge-pointer.json; fi; }
+restore() { chmod $mode $pd; if [[ -s $bak ]]; then cp $bak $pd/bridge-pointer.json; else rm -f $pd/bridge-pointer.json; fi; }
 trap restore EXIT
 write_pointer $ENV "" $pd/bridge-pointer.json; chmod 555 $pd
 dbg=$LOGDIR/deregister.debug.log; : > $dbg
