@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.1 — 2026-09-27
+
+No change in behaviour.
+
+- `tests/security` skips its repository checks when run outside a git checkout,
+  for example from the Homebrew install, and prints the skip message correctly.
+- README: says plainly that this is unofficial and not affiliated with Anthropic, and
+  cites the Remote Control docs, Claude Code's own logs and the fault test as the
+  basis for how it works.
+
 ## 0.1.0 — 2026-09-26
 
 First version, extracted from a setup that has run on one Mac since 2026-09-16.
