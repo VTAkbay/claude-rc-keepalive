@@ -84,8 +84,17 @@ for t in remote-control watchdog updater; do
     continue
   fi
   launchctl bootout gui/$(id -u)/$label 2>/dev/null || true
+  # bootout returns before launchd has finished removing the job (it waits for
+  # the process to exit), and bootstrapping too early fails with "5:
+  # Input/output error". Wait for it to be gone, and retry a few times.
+  for i in {1..30}; do launchctl print gui/$(id -u)/$label >/dev/null 2>&1 || break; sleep 1; done
   install -m 644 $tmp/$label.plist $plist
-  launchctl bootstrap gui/$(id -u) $plist
+  for i in {1..5}; do
+    launchctl bootstrap gui/$(id -u) $plist 2>/dev/null && break
+    launchctl print gui/$(id -u)/$label >/dev/null 2>&1 && break
+    (( i == 5 )) && { print -u2 "could not load $label; run: launchctl bootstrap gui/$(id -u) $plist"; exit 1; }
+    sleep 2
+  done
 done
 rm -rf $tmp
 [[ -d $HOME/.local/bin ]] && for b in $PREFIX/bin/*; do ln -sf $b $HOME/.local/bin/${b:t}; done
