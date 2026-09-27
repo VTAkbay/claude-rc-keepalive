@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2 — 2026-09-27
+
+- Fix: reinstalling with a changed remote-control agent (for example, turning the
+  debug log off) could fail with "Bootstrap failed: 5: Input/output error" and stop
+  before reloading the watchdog and updater. `launchctl bootout` returns before
+  launchd has removed the job, so the installer now waits for that, then retries
+  loading.
+
 ## 0.1.1 — 2026-09-27
 
 No change in behaviour.
