@@ -4,18 +4,21 @@
 #       [--prefix com.me.crk]     launchd label prefix (default com.claude-rc-keepalive)
 #       [--debug-log]             also keep Claude Code's remote-control debug log (records
 #                                 conversation text; useful when something goes wrong)
+#       [--chrome]                give remote-control sessions Claude in Chrome (browser
+#                                 tools; needs the Chrome extension, adds context per session)
 #       [--dry-run]               show what would be done, change nothing
 set -e
 umask 077
 SRC=${0:A:h}
-DIR="" PREFIX_LABEL=com.claude-rc-keepalive DRY=0 DEBUG=0
+DIR="" PREFIX_LABEL=com.claude-rc-keepalive DRY=0 DEBUG=0 CHROME=0
 while (( $# )); do
   case $1 in
     --dir) DIR=${2:A}; shift 2;;
     --prefix) PREFIX_LABEL=$2; shift 2;;
     --debug-log) DEBUG=1; shift;;
+    --chrome) CHROME=1; shift;;
     --dry-run) DRY=1; shift;;
-    -h|--help) sed -n '2,8p' $0 | sed 's/^# \{0,1\}//'; exit 0;;
+    -h|--help) sed -n '2,10p' $0 | sed 's/^# \{0,1\}//'; exit 0;;
     *) print -u2 "unknown option $1"; exit 2;;
   esac
 done
@@ -59,7 +62,7 @@ others=($(grep -l "remote-control" $LA/*.plist 2>/dev/null | grep -v "/$PREFIX_L
 RCPATH=${(j.:.)${(M)path:#/*}}
 
 # LaunchAgents are written with plistlib, so no path can break or inject into the XML
-mkplists() { python3 $SRC/lib/mkplists.py "$1" "$PREFIX_LABEL" "$CLAUDE" "$DIR" "$HOME" "$RCPATH" "$LOGDIR" "$PREFIX" "$DEBUG"; }
+mkplists() { python3 $SRC/lib/mkplists.py "$1" "$PREFIX_LABEL" "$CLAUDE" "$DIR" "$HOME" "$RCPATH" "$LOGDIR" "$PREFIX" "$DEBUG" "$CHROME"; }
 
 config="RC_DIR=${(q)DIR}
 LABEL_PREFIX=${(q)PREFIX_LABEL}"
@@ -98,5 +101,5 @@ for t in remote-control watchdog updater; do
 done
 rm -rf $tmp
 [[ -d $HOME/.local/bin ]] && for b in $PREFIX/bin/*; do ln -sf $b $HOME/.local/bin/${b:t}; done
-ok "installed; logs in $LOGDIR$( (( DEBUG )) && print ' (debug log on)')"
+ok "installed; logs in $LOGDIR$( (( DEBUG )) && print ' (debug log on)')$( (( CHROME )) && print '; Claude in Chrome on')"
 sleep 20; $PREFIX/bin/claude-rc-status

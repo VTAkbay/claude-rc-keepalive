@@ -1,9 +1,12 @@
 """Write the three LaunchAgents with plistlib, so no path can break or inject
-into the XML. Usage: mkplists.py OUTDIR PREFIX CLAUDE RC_DIR HOME RC_PATH LOGDIR INSTALL_PREFIX DEBUG(0/1)"""
+into the XML. Usage: mkplists.py OUTDIR PREFIX CLAUDE RC_DIR HOME RC_PATH LOGDIR INSTALL_PREFIX DEBUG(0/1) [CHROME(0/1)]"""
 import plistlib,sys,os
 out,pre,claude,rcdir,home,rcpath,logdir,prefix,debug=sys.argv[1:10]
+chrome=sys.argv[10] if len(sys.argv)>10 else '0'
 sys_path='/usr/bin:/bin:/usr/sbin:/sbin'
 rc_args=[claude,'remote-control']+(['--debug-file',f'{logdir}/remote-control.debug.log'] if debug=='1' else [])
+# Spawned sessions don't follow the machine's /chrome default; rc has to pass it on.
+rc_args+=['--chrome'] if chrome=='1' else []
 agents={
  'remote-control':dict(ProgramArguments=rc_args,WorkingDirectory=rcdir,
     EnvironmentVariables={'HOME':home,'PATH':rcpath},RunAtLoad=True,
