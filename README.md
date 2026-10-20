@@ -27,6 +27,7 @@ automatically when it happens anyway.
 | Restarted while its resume pointer is older than 4 hours | Discards the pointer, registers a **new** environment | Sessions orphaned; machine listed twice |
 | Restarted with `launchctl kickstart -k` | New process can start before the old one lets go → new environment | Same as above |
 | New Claude Code release installed | Keeps running the old binary until restarted | New models/features never show up |
+| Restarted on a new Claude Code version while the project is in a protected folder (`~/Documents`, `~/Desktop`, …) | macOS sees each version (`…/versions/<v>`) as a new program and asks for folder access again; remote control waits on the dialog | Nothing runs (scheduled checks too) until someone clicks Allow, e.g. all night |
 | Restarted within ~3 minutes of the previous bridge for that folder stopping, onto any *other* environment (including a brand-new one) | Server refuses it (HTTP 409 "This folder is already served…"); rc exits after ~1 min and is retried | Machine offline for ~3 minutes |
 
 ## What it installs
@@ -48,7 +49,14 @@ Three LaunchAgents, per user:
     15 minutes.
 - **updater** — every 30 min runs `claude update`; when a new version is installed
   and every session has been idle for 10 minutes, restarts remote control with a
-  plain SIGTERM (which keeps the environment) and verifies the result.
+  plain SIGTERM (which keeps the environment) and verifies the result. It only
+  restarts between 08:00 and 22:59 local time (`RESTART_HOURS=8-22` in the
+  config), so a macOS dialog never waits unseen overnight.
+
+Remote control runs from a fixed path, `~/.local/share/claude-rc-keepalive/claude`:
+a hard link to the current version that the updater moves before each restart.
+macOS ties folder permissions to that path, so it asks once instead of after
+every update.
 
 Plus a few commands: `claude-rc-status`, `claude-rc-consolidate`, `claude-rc-deregister`.
 
@@ -88,6 +96,14 @@ running when its settings haven't changed, so sessions are not interrupted.
 `--prefix com.example.claude-rc` changes the launchd labels.
 `--debug-log` also keeps Claude Code's remote-control debug log (see
 [Security and privacy](#security-and-privacy) before turning it on).
+`--chrome` gives remote-control sessions Claude in Chrome. Sessions that
+remote control spawns don't follow the machine's `/chrome` "Enabled by default"
+setting, so this is the only way to get browser tools there. It loads the
+browser tools into every session, which costs some context.
+
+The first start after installing may show one macOS dialog asking whether
+"claude" may access the folder (for example Documents). Click Allow; it isn't
+asked again after updates.
 
 Check it any time:
 
@@ -159,7 +175,7 @@ one by itself. It interrupts sessions for ~5 minutes.
 
 | Claude Code | macOS | Result |
 |---|---|---|
-| 2.1.272 – 2.1.283 | 26.x, 27.0 (Apple silicon) | outages, updates, restarts, split/merge — see CHANGELOG |
+| 2.1.272 – 2.1.304 | 26.x, 27.0 (Apple silicon) | outages, updates, restarts, split/merge — see CHANGELOG |
 
 If a Claude Code release breaks it, please open an issue with
 `claude-rc-status` output and the `bridge:` lines from the debug log (never

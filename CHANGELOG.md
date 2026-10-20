@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.3 — 2026-10-20
+
+- Fix: after an overnight update restart, macOS asked for folder access again
+  (each Claude Code version lives at a new path, which macOS treats as a new
+  program). Remote control waited on the dialog, so nothing ran for 7 hours,
+  including scheduled checks. Remote control now runs from a fixed path
+  (`~/.local/share/claude-rc-keepalive/claude`, a hard link to the current
+  version, moved by the updater before each restart), so macOS asks once. The
+  running version is found by matching the file instead of its path.
+- The updater only restarts remote control in `RESTART_HOURS` (default 8-22,
+  local time), so any dialog appears while someone is around.
+- `install.sh --chrome`: gives remote-control sessions Claude in Chrome. Spawned
+  sessions don't follow the machine's `/chrome` default.
+- Reinstall to switch to the fixed path; the first start may ask for folder
+  access once.
+
 ## 0.1.2 — 2026-09-27
 
 - Fix: reinstalling with a changed remote-control agent (for example, turning the
