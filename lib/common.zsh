@@ -8,6 +8,14 @@ CONF=${CLAUDE_RC_KEEPALIVE_CONF:-$HOME/.config/claude-rc-keepalive/config}
 : ${WD_LABEL:=$LABEL_PREFIX.watchdog}
 : ${UP_LABEL:=$LABEL_PREFIX.updater}
 : ${CLAUDE:=$HOME/.local/bin/claude}
+# macOS ties folder permissions (e.g. access to ~/Documents) to a command-line
+# program's path, and every Claude Code update lives at a new path
+# (~/.local/share/claude/versions/<v>), so macOS asks again after each update,
+# and a remote control restarted overnight waits on that dialog until morning.
+# remote control therefore runs from this fixed path: a hard link to the
+# current version, refreshed before every restart.
+: ${RC_BIN:=$HOME/.local/share/claude-rc-keepalive/claude}
+: ${RESTART_HOURS:=8-22}   # local hours (inclusive) in which the updater may restart rc
 : ${STATE:=$HOME/.local/share/claude-rc-keepalive/state}
 : ${LOGDIR:=$HOME/Library/Logs/claude-rc-keepalive}
 : ${RC_DIR:=}
@@ -22,9 +30,29 @@ lpid() { launchctl print "gui/$(id -u)/$1" 2>/dev/null | awk '$1=="pid" && $2=="
 jget() { python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2],''))" "$1" "$2" 2>/dev/null; }
 pointer_field() { jget $POINTER $1; }
 # pgrep -f misses some of these processes on macOS, so match argv exactly
-rc_pids()  { ps -U $(id -u) -o pid=,command= | awk -v CL="$CLAUDE" '$2==CL && $3=="remote-control"{print $1}'; }
-per_session_pids() { ps -U $(id -u) -o pid=,command= | awk -v CL="$CLAUDE" '$2==CL && $3=="remote-control" && $4=="--session-id"{print $1}'; }
-sid_pid()  { ps -U $(id -u) -o pid=,command= | awk -v CL="$CLAUDE" -v S="$1" '$2==CL && $3=="remote-control" && $4=="--session-id" && $5==S{print $1; exit}'; }
+rc_pids()  { ps -U $(id -u) -o pid=,command= | awk -v CL="$CLAUDE" -v RB="$RC_BIN" '($2==CL || $2==RB) && $3=="remote-control"{print $1}'; }
+per_session_pids() { ps -U $(id -u) -o pid=,command= | awk -v CL="$CLAUDE" -v RB="$RC_BIN" '($2==CL || $2==RB) && $3=="remote-control" && $4=="--session-id"{print $1}'; }
+sid_pid()  { ps -U $(id -u) -o pid=,command= | awk -v CL="$CLAUDE" -v RB="$RC_BIN" -v S="$1" '($2==CL || $2==RB) && $3=="remote-control" && $4=="--session-id" && $5==S{print $1; exit}'; }
+# the executable to start remote control with: the fixed path once installed
+rc_exe() { [[ -x $RC_BIN ]] && print -r -- $RC_BIN || print -r -- $CLAUDE; }
+# point RC_BIN at the version ~/.local/bin/claude points to (atomic; a running
+# rc keeps its old file)
+link_rc_bin() {
+  local v; v=$(readlink "$CLAUDE") || return 1; [[ -f $v ]] || return 1
+  ln -f "$v" "$RC_BIN.tmp" && mv -f "$RC_BIN.tmp" "$RC_BIN"
+}
+# version a process runs: from its path, or for the hard link, by matching its
+# file (inode) with the installed versions; empty if that version is gone
+running_version() {
+  local out ino p f
+  out=$(lsof -a -p "$1" -d txt -Fin 2>/dev/null | awk '/^i/{i=substr($0,2)} /^n/{print i" "substr($0,2); exit}')
+  [[ -n $out ]] || return 0
+  ino=${out%% *}; p=${out#* }
+  [[ $p == */claude/versions/* ]] && { print -r -- ${p:t}; return 0; }
+  for f in ${$(readlink "$CLAUDE"):h}/*(N); do [[ "$(stat -f %i "$f")" == "$ino" ]] && { print -r -- ${f:t}; return 0; }; done
+}
+# is the current local hour inside RESTART_HOURS ("8-22")?
+restart_hour_ok() { local h=$(( 10#$(date +%H) )) a=${RESTART_HOURS%-*} b=${RESTART_HOURS#*-}; (( h >= a && h <= b )); }
 proc_cwd() { lsof -a -p "$1" -d cwd -Fn 2>/dev/null | awk '/^n/{print substr($0,2); exit}'; }
 used_cwds() { local p; for p in $(rc_pids); do proc_cwd $p; done; }
 write_pointer() { print -r -- "{\"sessionId\":\"${2:-}\",\"environmentId\":\"$1\",\"source\":\"standalone\"}" > $3; }

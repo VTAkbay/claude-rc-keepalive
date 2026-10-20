@@ -17,11 +17,13 @@ out=$($CLAUDE update 2>&1) || log "claude update failed: ${out//$'\n'/ | }"
 
 pid=$(lpid $RC_LABEL)
 [[ -n "$pid" ]] || { log "rc not running; nothing to restart"; exit 0; }
-running=$(lsof -p "$pid" 2>/dev/null | awk '$4=="txt" && $9 ~ /\/claude\/versions\//{print $9; exit}')
+running=$(running_version "$pid")
 current=$(readlink "$CLAUDE")
-[[ -n "$running" && -n "$current" ]] || { log "cannot resolve versions (running='$running' installed='$current'); is this the native install?"; exit 1; }
-[[ "$running" == "$current" ]] && exit 0
-log "rc runs ${running:t}, installed ${current:t}"
+[[ -n "$current" ]] || { log "cannot resolve the installed version ($CLAUDE); is this the native install?"; exit 1; }
+[[ "$running" == "${current:t}" ]] && exit 0
+log "rc runs ${running:-an old version (already removed)}, installed ${current:t}"
+# a restart can bring up a macOS permission dialog: only when someone is around
+restart_hour_ok || { log "outside restart hours ($RESTART_HOURS); deferring"; exit 0; }
 
 [[ "$(ps -o stat= -p "$pid" | tr -d ' ')" == T* ]] && { log "rc is frozen (network down); deferring"; exit 0; }
 
@@ -40,6 +42,10 @@ page=$(( now - $(stat -f %m "$POINTER" 2>/dev/null || echo 0) ))
 (( page > 3*3600 )) && { log "pointer is ${page}s old (rc TTL is 4h); not restarting"; exit 1; }
 (( DRY_RUN )) && { log "DRY RUN: would restart rc pid $pid (env $before)"; exit 0; }
 
+# the fixed path rc runs from must point at the new version before it restarts
+if [[ -e $RC_BIN ]]; then
+  link_rc_bin || { log "cannot update $RC_BIN; not restarting"; exit 1; }
+fi
 log "stopping rc pid $pid to pick up ${current:t}"
 kill -TERM "$pid"
 for i in {1..60}; do kill -0 "$pid" 2>/dev/null || break; sleep 1; done

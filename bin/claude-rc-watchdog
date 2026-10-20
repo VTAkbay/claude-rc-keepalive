@@ -134,7 +134,7 @@ keepalive() {
     if (( ! DRY_RUN )); then
       # own session/process group, so neither rc's shutdown nor ours takes the other down
       python3 -c 'import subprocess,sys; l=open(sys.argv[1],"ab"); subprocess.Popen(sys.argv[3:],cwd=sys.argv[2],stdin=subprocess.DEVNULL,stdout=l,stderr=l,start_new_session=True)' \
-        $LOGDIR/reattach-${sid#session_}.log "$folder" $CLAUDE remote-control --session-id "$sid"
+        $LOGDIR/reattach-${sid#session_}.log "$folder" $(rc_exe) remote-control --session-id "$sid"
       launched_at[$sid]=$now; used+=("$folder")
     fi
     print -r -- "$sid	$env	$folder	$quick	$seen	${real:-0}" >> $tmp

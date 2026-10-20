@@ -11,6 +11,6 @@ done
 for b in claude-rc-watchdog claude-rc-update claude-rc-status claude-rc-consolidate claude-rc-deregister; do
   [[ "$(readlink $HOME/.local/bin/$b)" == $HOME/.local/share/claude-rc-keepalive/* ]] && rm -f $HOME/.local/bin/$b
 done
-rm -rf $HOME/.local/share/claude-rc-keepalive/bin $HOME/.local/share/claude-rc-keepalive/lib
+rm -rf $HOME/.local/share/claude-rc-keepalive/bin $HOME/.local/share/claude-rc-keepalive/lib $HOME/.local/share/claude-rc-keepalive/claude
 if [[ $1 == --purge ]]; then rm -rf $HOME/.config/claude-rc-keepalive $HOME/.local/share/claude-rc-keepalive $HOME/Library/Logs/claude-rc-keepalive; print "purged config, state and logs"; fi
 print "done"

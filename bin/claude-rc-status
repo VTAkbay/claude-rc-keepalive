@@ -12,9 +12,11 @@ done
 
 mp=$(lpid $RC_LABEL)
 if [[ -n "$mp" ]]; then
-  running=$(lsof -p $mp 2>/dev/null | awk '$4=="txt" && $9 ~ /\/claude\/versions\//{print $9; exit}')
+  running=$(running_version $mp)
   [[ "$(ps -o stat= -p $mp | tr -d ' ')" == T* ]] && bad "main rc pid $mp is FROZEN (watchdog: network down)" || ok "main rc pid $mp in $RC_DIR"
-  [[ "${running:t}" == "$(readlink $CLAUDE | xargs basename)" ]] && ok "running ${running:t} (latest installed)" || note "running ${running:t}, installed $(readlink $CLAUDE | xargs basename) (updater switches when idle)"
+  [[ "$running" == "$(readlink $CLAUDE | xargs basename)" ]] && ok "running $running (latest installed)" || note "running ${running:-an old version}, installed $(readlink $CLAUDE | xargs basename) (updater switches when idle, $RESTART_HOURS h)"
+  [[ "$(ps -o command= -p $mp | awk '{print $1}')" == "$RC_BIN" ]] && ok "runs from the fixed path (macOS keeps its folder permissions across updates)" \
+    || note "runs from $(ps -o command= -p $mp | awk '{print $1}'); reinstall so macOS stops asking for folder access after every update"
 fi
 
 if [[ -f $POINTER ]]; then
