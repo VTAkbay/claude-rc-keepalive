@@ -54,9 +54,11 @@ Three LaunchAgents, per user:
   config), so a macOS dialog never waits unseen overnight.
 
 Remote control runs from a fixed path, `~/.local/share/claude-rc-keepalive/claude`:
-a hard link to the current version that the updater moves before each restart.
-macOS ties folder permissions to that path, so it asks once instead of after
-every update.
+a copy of the current version (an APFS clone, so instant and free) that the
+updater refreshes before each restart. macOS ties folder permissions to that
+path, so it asks once instead of after every update. A hard link would not do:
+a file with several links has one name in the kernel, whichever link was looked
+up last, and macOS identifies the process by that name.
 
 Plus a few commands: `claude-rc-status`, `claude-rc-consolidate`, `claude-rc-deregister`.
 
@@ -165,6 +167,10 @@ later reinstall reconnects the same sessions.
 `$(...)`) can't break the LaunchAgents or execute anything, files are private,
 folders with project config are never used as helpers, and the repository holds
 no tokens or IDs.
+
+`tests/fixed-path` checks, offline, that the fixed path keeps its name in the
+kernel after something looks up the versioned binary (a hard link does not),
+and that the running version is still found through the copy.
 
 `tests/fault-stale-pointer` reproduces the "came back on a new environment"
 failure on purpose (ages the pointer past 4 hours and restarts remote control)
