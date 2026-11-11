@@ -1,0 +1,44 @@
+#!/bin/zsh
+# Offline check of the fixed path remote control runs from: the kernel keeps
+# reporting that path for a running copy after something looks up the versioned
+# binary (it did not for the 0.1.3 hard link, so macOS saw versions/<v> and asked
+# for folder access again), and running_version finds the version through the
+# copy. Uses a clone of the installed Claude Code in a temp dir (a copy of a
+# system binary is killed outside the system volume); changes nothing else.
+R=${0:A:h}/..; T=$(mktemp -d); T=${T:A}; sp=
+trap 'kill $sp 2>/dev/null; sleep 1; rm -rf $T' EXIT
+pass=0 fail=0
+check() { if eval "$2"; then print "✔ $1"; (( pass++ )); else print "✘ $1"; (( fail++ )); fi; }
+# kpath <file> <other>: open <file> (as exec would), look up <other>, then ask the
+# kernel for the open file's name (what macOS identifies a program by)
+kpath() { python3 -c 'import fcntl,os,sys; fd=os.open(sys.argv[1],os.O_RDONLY); os.stat(sys.argv[2]); print(fcntl.fcntl(fd,fcntl.F_GETPATH,b"\0"*1024).split(b"\0")[0].decode())' "$1" "$2"; }
+real=$(readlink $HOME/.local/bin/claude 2>/dev/null)
+[[ -f "$real" ]] || { print "needs the native Claude Code install (~/.local/bin/claude -> versions/<v>); skipped"; exit 0; }
+
+# a fake native install: versions/9.9.9 is the installed Claude Code under another name
+mkdir -p $T/versions $T/bin $T/pfx $T/home
+cp -c "$real" $T/versions/9.9.9 2>/dev/null || cp "$real" $T/versions/9.9.9
+ln -s $T/versions/9.9.9 $T/bin/claude
+export CLAUDE=$T/bin/claude RC_BIN=$T/pfx/claude
+source $R/lib/common.zsh
+
+# 1. the copy keeps its own name after a lookup of versions/<v> (a hard link may not)
+copy_rc_bin; check "copy_rc_bin makes a separate file" '[[ $(stat -f %l $RC_BIN) == 1 && $(stat -f %i $RC_BIN) != $(stat -f %i $T/versions/9.9.9) ]]'
+check "copy keeps its path in the kernel"   '[[ "$(kpath $RC_BIN $T/versions/9.9.9)" == "$RC_BIN" ]]'
+ln -f $T/versions/9.9.9 $T/pfx/hardlink
+[[ "$(kpath $T/pfx/hardlink $T/versions/9.9.9)" == "$T/pfx/hardlink" ]] && print -r -- "- note: a hard link kept its name on this macOS; the copy is still the safe choice"
+
+# 2. running_version finds the version a process runs through the copy
+#    (`mcp serve` waits on stdin and talks to nobody; a throwaway HOME keeps it off your config)
+mkfifo $T/in
+HOME=$T/home DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 $RC_BIN mcp serve < $T/in > $T/out 2>&1 & sp=$!
+exec {w}> $T/in
+for i in {1..20}; do [[ -n "$(lsof -a -p $sp -d txt -Fn 2>/dev/null)" ]] && break; sleep 0.5; done
+check "running version found by signature"  '[[ "$(running_version $sp)" == 9.9.9 ]]'
+copy_rc_bin   # an update: the copy is replaced under the running process
+check "copy replaced with a new file"       '[[ $(stat -f %i $RC_BIN) != $(lsof -a -p $sp -d txt -Fi 2>/dev/null | awk "/^i/{print substr(\$0,2); exit}") ]]'
+check "old process reports no version"      '[[ -z "$(running_version $sp)" ]]'
+check "old process still runs"              'kill -0 $sp'
+exec {w}>&-
+
+print "\n$pass passed, $fail failed"; (( fail == 0 ))

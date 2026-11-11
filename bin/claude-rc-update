@@ -44,7 +44,7 @@ page=$(( now - $(stat -f %m "$POINTER" 2>/dev/null || echo 0) ))
 
 # the fixed path rc runs from must point at the new version before it restarts
 if [[ -e $RC_BIN ]]; then
-  link_rc_bin || { log "cannot update $RC_BIN; not restarting"; exit 1; }
+  copy_rc_bin || { log "cannot update $RC_BIN; not restarting"; exit 1; }
 fi
 log "stopping rc pid $pid to pick up ${current:t}"
 kill -TERM "$pid"

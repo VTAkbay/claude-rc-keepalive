@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Fix: the fixed path (0.1.3) did not keep macOS from asking for folder access
+  after an update. It was a hard link, and a file with several links has one
+  name in the kernel: whichever link was looked up last. `claude update` and the
+  updater's own check of the versions folder flipped that name to
+  `versions/<v>` within 30 minutes of every restart, macOS identified remote
+  control by it, and the dialog came back for each new version. The fixed path
+  is now a copy (an APFS clone, instant and free). The running version is found
+  by its code signature instead of its inode. `claude-rc-status` points out a
+  leftover hard link; the next update restart replaces it, or reinstall.
+- `tests/fixed-path`: offline check for the above.
+
 ## 0.1.3 — 2026-10-20
 
 - Fix: after an overnight update restart, macOS asked for folder access again

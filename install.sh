@@ -61,8 +61,8 @@ others=($(grep -l "remote-control" $LA/*.plist 2>/dev/null | grep -v "/$PREFIX_L
 # PATH for remote control (its sessions run your tools): yours, minus relative entries
 RCPATH=${(j.:.)${(M)path:#/*}}
 
-# remote control runs from a fixed path (a hard link to the current version),
-# so macOS keeps its folder permissions across updates; see RC_BIN in lib/common.zsh
+# remote control runs from a fixed path (a copy of the current version), so
+# macOS keeps its folder permissions across updates; see RC_BIN in lib/common.zsh
 RC_BIN=$PREFIX/claude
 # LaunchAgents are written with plistlib, so no path can break or inject into the XML
 mkplists() { python3 $SRC/lib/mkplists.py "$1" "$PREFIX_LABEL" "$RC_BIN" "$DIR" "$HOME" "$RCPATH" "$LOGDIR" "$PREFIX" "$DEBUG" "$CHROME"; }
@@ -79,7 +79,7 @@ fi
 
 mkdir -p $PREFIX $LOGDIR ${CONF:h} $LA $PREFIX/state; chmod 700 $LOGDIR $PREFIX/state
 rm -rf $PREFIX/bin $PREFIX/lib; cp -R $SRC/bin $SRC/lib $PREFIX/; chmod 755 $PREFIX/bin/*
-ln -f "$(readlink $CLAUDE)" $RC_BIN.tmp && mv -f $RC_BIN.tmp $RC_BIN
+{ cp -c "$(readlink $CLAUDE)" $RC_BIN.tmp 2>/dev/null || cp "$(readlink $CLAUDE)" $RC_BIN.tmp; } && mv -f $RC_BIN.tmp $RC_BIN
 print -r -- $config > $CONF
 tmp=$(mktemp -d); mkplists $tmp
 for t in remote-control watchdog updater; do

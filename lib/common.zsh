@@ -12,8 +12,11 @@ CONF=${CLAUDE_RC_KEEPALIVE_CONF:-$HOME/.config/claude-rc-keepalive/config}
 # program's path, and every Claude Code update lives at a new path
 # (~/.local/share/claude/versions/<v>), so macOS asks again after each update,
 # and a remote control restarted overnight waits on that dialog until morning.
-# remote control therefore runs from this fixed path: a hard link to the
-# current version, refreshed before every restart.
+# remote control therefore runs from this fixed path: a copy of the current
+# version (an APFS clone), refreshed before every restart. Not a hard link: a
+# file with several links has one name in the kernel, the link looked up last,
+# and macOS identifies the process by that name. `claude update` and a stat of
+# the versions folder flipped it to versions/<v>, and the dialog came back.
 : ${RC_BIN:=$HOME/.local/share/claude-rc-keepalive/claude}
 : ${RESTART_HOURS:=8-22}   # local hours (inclusive) in which the updater may restart rc
 : ${STATE:=$HOME/.local/share/claude-rc-keepalive/state}
@@ -35,21 +38,27 @@ per_session_pids() { ps -U $(id -u) -o pid=,command= | awk -v CL="$CLAUDE" -v RB
 sid_pid()  { ps -U $(id -u) -o pid=,command= | awk -v CL="$CLAUDE" -v RB="$RC_BIN" -v S="$1" '($2==CL || $2==RB) && $3=="remote-control" && $4=="--session-id" && $5==S{print $1; exit}'; }
 # the executable to start remote control with: the fixed path once installed
 rc_exe() { [[ -x $RC_BIN ]] && print -r -- $RC_BIN || print -r -- $CLAUDE; }
-# point RC_BIN at the version ~/.local/bin/claude points to (atomic; a running
-# rc keeps its old file)
-link_rc_bin() {
+# make RC_BIN a copy of the version ~/.local/bin/claude points to (a clone where
+# the file system supports it: instant, no extra space; atomic, so a running rc
+# keeps its old file)
+copy_rc_bin() {
   local v; v=$(readlink "$CLAUDE") || return 1; [[ -f $v ]] || return 1
-  ln -f "$v" "$RC_BIN.tmp" && mv -f "$RC_BIN.tmp" "$RC_BIN"
+  { cp -c "$v" "$RC_BIN.tmp" 2>/dev/null || cp "$v" "$RC_BIN.tmp"; } && mv -f "$RC_BIN.tmp" "$RC_BIN"
 }
-# version a process runs: from its path, or for the hard link, by matching its
-# file (inode) with the installed versions; empty if that version is gone
+# hash of a binary's code signature: the same for every copy of a build
+cdhash() { codesign -dvvv "$1" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}'; }
+# version a process runs: from its path, or for the fixed-path copy, by matching
+# its signature with the installed versions; empty if the copy was replaced
+# under the process (it runs an older version, maybe one already removed)
 running_version() {
-  local out ino p f
+  local out ino p f h
   out=$(lsof -a -p "$1" -d txt -Fin 2>/dev/null | awk '/^i/{i=substr($0,2)} /^n/{print i" "substr($0,2); exit}')
   [[ -n $out ]] || return 0
   ino=${out%% *}; p=${out#* }
   [[ $p == */claude/versions/* ]] && { print -r -- ${p:t}; return 0; }
-  for f in ${$(readlink "$CLAUDE"):h}/*(N); do [[ "$(stat -f %i "$f")" == "$ino" ]] && { print -r -- ${f:t}; return 0; }; done
+  [[ "$(stat -f %i "$p" 2>/dev/null)" == "$ino" ]] || return 0
+  h=$(cdhash "$p"); [[ -n $h ]] || return 0
+  for f in ${$(readlink "$CLAUDE"):h}/*(N); do [[ "$(cdhash "$f")" == "$h" ]] && { print -r -- ${f:t}; return 0; }; done
 }
 # is the current local hour inside RESTART_HOURS ("8-22")?
 restart_hour_ok() { local h=$(( 10#$(date +%H) )) a=${RESTART_HOURS%-*} b=${RESTART_HOURS#*-}; (( h >= a && h <= b )); }
